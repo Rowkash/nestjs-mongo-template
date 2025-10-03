@@ -1,0 +1,167 @@
+services:
+  backend:
+    container_name: "nestjs-mongo-backend"
+    build:
+      context: ./backend
+      target: ${CONTEXT:-development}
+    env_file:
+      - ${ENV_FILE:-.development.env}
+    volumes:
+      - ${VOLUMES:-./backend:/app}
+      - /app/node_modules
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - nestjs-mongo
+
+  mongo:
+    container_name: "nestjs-mongo-mongo"
+    image: mongo:latest
+    env_file:
+      - ${ENV_FILE:-.development.env}
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - '27017:27017'
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.runCommand('ping').ok", "--quiet" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - nestjs-mongo
+
+  redis:
+    container_name: "nestjs-mongo-redis"
+    image: redis:latest
+    env_file:
+      - ${ENV_FILE:-.development.env}
+    volumes:
+      - redis-data:/data
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - nestjs-mongo
+
+  minio:
+    container_name: "nestjs-mongo-minio"
+    image: bitnami/minio:latest
+    command: server /bitnami/minio/data --console-address ":9001"
+    env_file:
+      - ${ENV_FILE:-.development.env}
+    volumes:
+      - minio-data:/bitnami/minio/data
+    healthcheck:
+      test: [ "CMD", "curl", "-I", "http://minio:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - nestjs-mongo
+
+  promtail:
+    container_name: "nestjs-mongo-promtail"
+    image: grafana/promtail:latest
+    user: root
+    command: -config.file=/etc/promtail/config.yaml -log.level=info
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./services_configs/promtail/config.yaml:/etc/promtail/config.yaml
+    depends_on:
+      backend:
+        condition: service_started
+      loki:
+        condition: service_started
+    networks:
+      - nestjs-mongo
+
+  loki:
+    container_name: "nestjs-mongo-loki"
+    image: grafana/loki:latest
+    volumes:
+      - ./services_configs/loki/config.yaml:/etc/loki/config.yaml
+      - loki-data:/loki
+    networks:
+      - nestjs-mongo
+
+  grafana:
+    container_name: "nestjs-mongo-grafana"
+    image: grafana/grafana:latest
+    env_file:
+      - ${ENV_FILE:-.development.env}
+    volumes:
+      - ./services_configs/grafana/config/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - nestjs-mongo
+
+  prometheus:
+    container_name: "nestjs-mongo-prometheus"
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./services_configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - nestjs-mongo
+
+  nginx:
+    container_name: "nestjs-mongo-nginx"
+    image: nginx
+    ports:
+      - "8080:8080"
+    restart: always
+    volumes:
+      - ./services_configs/nginx/nginx.conf:/etc/nginx/nginx.conf
+    networks:
+      - nestjs-mongo
+    depends_on:
+      backend:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+
+networks:
+  nestjs-mongo:
+    driver: bridge
+
+volumes:
+  mongo-data:
+    driver: local
+  redis-data:
+    driver: local
+  minio-data:
+    driver: local
+  loki-data:
+    driver: local
+  grafana-data:
+    driver: local
+  prometheus-data:
+    driver: local
